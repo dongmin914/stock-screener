@@ -1,7 +1,6 @@
 yfinance>=0.2.40
 pandas>=2.1
 numpy>=1.26
-pandas-ta>=0.3.14b
 streamlit>=1.30
 lxml>=5.0
 requests>=2.31
