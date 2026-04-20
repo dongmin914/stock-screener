@@ -176,7 +176,8 @@ for key, short in COND_SHORT.items():
     view[short] = view[key].map({True: "✅", False: "·"})
 view["티어"] = view["tier"].map(lambda t: f"{TIER_ICON.get(t, '·')}")
 
-# Determine selected ticker before rendering (table is below chart).
+# Determine selected ticker from previous-run session state (table renders first now,
+# but its selection from the prior rerun still drives chart below).
 if len(view) == 0:
     selected_ticker = None
     selected_name = None
@@ -188,7 +189,32 @@ else:
     selected_ticker = view.iloc[idx]["ticker"]
     selected_name = view.iloc[idx]["name"]
 
-# --- Chart on top (full width) ---
+# --- Table on top (full width) ---
+st.markdown("### 📋 스크리닝 결과 (행 클릭 → 아래 차트 갱신)")
+
+if len(view) > 0:
+    compact_cols = ["ticker", "name"]
+    if "시총" in view.columns:
+        compact_cols.append("시총")
+    compact_cols += ["티어", "score"] + list(COND_SHORT.values()) + ["disparity_200", "rsi14"]
+
+    st.dataframe(
+        view[compact_cols].rename(columns={
+            "ticker": "티커",
+            "name": "회사명",
+            "score": "점수",
+            "disparity_200": "이격%",
+            "rsi14": "RSI",
+        }),
+        use_container_width=True,
+        height=400,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="result_table",
+    )
+
+# --- Chart below table (full width) ---
 if selected_ticker:
     st.markdown(f"### 📊 {selected_ticker} — {selected_name}")
     chart_h = 650
@@ -230,7 +256,7 @@ if selected_ticker:
     """
     components.html(widget_html, height=chart_h + 5, scrolling=False)
 
-    # --- Company info expander (below chart, above table) ---
+    # --- Company info expander (below chart) ---
     summary_cache = load_summary_cache()
     sel_row = view[view["ticker"] == selected_ticker].iloc[0]
 
@@ -263,31 +289,6 @@ if selected_ticker:
 
 else:
     st.info("필터 조건에 맞는 종목이 없어요. 사이드바에서 기준을 완화하세요.")
-
-# --- Table below chart (full width) ---
-st.markdown("### 📋 스크리닝 결과 (행 클릭 → 위 차트 갱신)")
-
-if len(view) > 0:
-    compact_cols = ["ticker", "name"]
-    if "시총" in view.columns:
-        compact_cols.append("시총")
-    compact_cols += ["티어", "score"] + list(COND_SHORT.values()) + ["disparity_200", "rsi14"]
-
-    st.dataframe(
-        view[compact_cols].rename(columns={
-            "ticker": "티커",
-            "name": "회사명",
-            "score": "점수",
-            "disparity_200": "이격%",
-            "rsi14": "RSI",
-        }),
-        use_container_width=True,
-        height=400,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="result_table",
-    )
 
 with st.expander("체크리스트 설명 / 점수 기준 (10점 만점)"):
     st.markdown(

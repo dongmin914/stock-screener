@@ -13,15 +13,44 @@ DEFAULT_RATE = 1380.0  # ultimate fallback if meta has no rate
 
 @st.cache_data(ttl=3600)
 def get_usd_krw() -> tuple[float, bool]:
-    """Return (rate, is_fresh). is_fresh=False means fallback was used."""
-    try:
-        rate = float(yf.Ticker("USDKRW=X").fast_info["last_price"])
-        if rate > 0:
-            _persist(rate)
-            return rate, True
-    except Exception:
-        pass
+    """Return (rate, is_fresh). is_fresh=False means fallback was used.
+
+    Tries yf.download first (most reliable for forex), then fast_info, then history,
+    before falling back to persisted meta.json or DEFAULT_RATE.
+    """
+    for fetch in (_fetch_via_download, _fetch_via_fast_info, _fetch_via_history):
+        try:
+            rate = fetch()
+            if rate and rate > 0:
+                _persist(rate)
+                return rate, True
+        except Exception:
+            continue
     return _read_fallback(), False
+
+
+def _fetch_via_download() -> float | None:
+    df = yf.download("USDKRW=X", period="5d", progress=False, auto_adjust=True)
+    if df is None or df.empty:
+        return None
+    close = df["Close"].dropna()
+    return float(close.iloc[-1]) if len(close) else None
+
+
+def _fetch_via_fast_info() -> float | None:
+    fi = yf.Ticker("USDKRW=X").fast_info
+    for key in ("last_price", "lastPrice", "regularMarketPrice"):
+        val = fi.get(key) if hasattr(fi, "get") else getattr(fi, key, None)
+        if val:
+            return float(val)
+    return None
+
+
+def _fetch_via_history() -> float | None:
+    hist = yf.Ticker("USDKRW=X").history(period="5d")
+    if hist is None or hist.empty:
+        return None
+    return float(hist["Close"].iloc[-1])
 
 
 def _persist(rate: float):
