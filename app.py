@@ -12,6 +12,7 @@ from src.screener import ICHIMOKU_MODES, TIER_KO, score
 from src.fx import get_usd_krw
 from src.format import format_market_cap
 from src.sector_ko import translate_sector, translate_industry
+from src.analysis import analyze_stream, get_cached, get_api_key
 
 DATA = Path(__file__).parent / "data"
 RESULTS = DATA / "results.csv"
@@ -299,6 +300,61 @@ def _render_company_info(selected_ticker: str, view: pd.DataFrame, beginner: boo
             lcol3.link_button("Yahoo Finance", f"https://finance.yahoo.com/quote/{selected_ticker}", use_container_width=True)
 
 
+def _render_ai_analysis(selected_ticker: str, selected_name: str, ichimoku_mode: str, view: pd.DataFrame):
+    """Render the AI analysis expander for the selected ticker."""
+    summary_cache = load_summary_cache()
+
+    with st.expander("🤖 AI 종목 분석 (Gemini)", expanded=False):
+        if not get_api_key():
+            st.warning(
+                "⚠️ Gemini API 키가 설정되지 않았습니다.\n\n"
+                "**설정 방법 (Streamlit Cloud)**:\n"
+                "앱 페이지 우상단 ⋮ → Settings → Secrets → `GEMINI_API_KEY = \"...\"` 추가\n\n"
+                "**로컬 설정**:\n"
+                "`.streamlit/secrets.toml` 파일에 `GEMINI_API_KEY = \"...\"` 추가\n\n"
+                "[API 키 발급 →](https://aistudio.google.com/)"
+            )
+        else:
+            cached = get_cached(selected_ticker, ichimoku_mode)
+
+            col_info, col_btn = st.columns([4, 1])
+            col_info.caption(f"{selected_ticker} — {selected_name} / 일목 {ichimoku_mode} 기준")
+
+            if cached:
+                st.markdown(cached)
+                if col_btn.button("🔄 재분석", key=f"reanalyze_{selected_ticker}"):
+                    from src.analysis import _load_cache, _save_cache
+                    c = _load_cache()
+                    c.pop(selected_ticker, None)
+                    _save_cache(c)
+                    st.rerun()
+            else:
+                if "analysis_count" not in st.session_state:
+                    st.session_state["analysis_count"] = 0
+                SESSION_LIMIT = 30
+
+                if st.session_state["analysis_count"] >= SESSION_LIMIT:
+                    st.warning(f"세션 한도({SESSION_LIMIT}회) 초과. 페이지를 새로고침하면 초기화됩니다.")
+                else:
+                    if col_btn.button("🚀 분석 시작", key=f"analyze_{selected_ticker}", type="primary"):
+                        summary_data = summary_cache.get(selected_ticker, {})
+                        summary_ko = summary_data.get("ko") or summary_data.get("en")
+
+                        sel_row = view[view["ticker"] == selected_ticker].iloc[0]
+
+                        try:
+                            with st.spinner("Gemini 분석 생성 중..."):
+                                st.write_stream(
+                                    analyze_stream(sel_row.to_dict(), ichimoku_mode, summary_ko)
+                                )
+                            st.session_state["analysis_count"] += 1
+                            st.caption(f"세션 사용량: {st.session_state['analysis_count']}/{SESSION_LIMIT}")
+                        except Exception as e:
+                            st.error(f"분석 실패: {e}")
+                    else:
+                        st.caption("아래 버튼을 누르면 Gemini가 이 종목을 분석합니다. (같은 날 같은 종목은 캐시 재사용)")
+
+
 def _stars(score_val: float) -> str:
     if score_val >= 8.0:
         return "⭐⭐⭐⭐⭐"
@@ -382,6 +438,7 @@ def render_beginner(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: 
 
     _render_chart(selected_ticker, selected_name, tf)
     _render_company_info(selected_ticker, view, beginner=True)
+    _render_ai_analysis(selected_ticker, selected_name, ichimoku_mode, view)
 
 
 def render_advanced(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: str, rsi_th: int, disp_th: int):
@@ -431,6 +488,7 @@ def render_advanced(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: 
     if selected_ticker:
         _render_chart(selected_ticker, selected_name, tf)
         _render_company_info(selected_ticker, view, beginner=False)
+        _render_ai_analysis(selected_ticker, selected_name, ichimoku_mode, view)
     else:
         st.info("필터 조건에 맞는 종목이 없어요. 사이드바에서 기준을 완화하세요.")
 

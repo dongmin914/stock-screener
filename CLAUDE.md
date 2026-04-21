@@ -46,3 +46,9 @@ python -m src.tickers     # 티커 스크래핑 점검
 - 티어 라벨: `본진입 후보 / 분할 매수 관심 / 조건 미충족`
 - 사용자는 **구름대(cloud)만** 보고 Ichimoku 판단 → 기본 모드 **B (가격 구름대 아래)**
 - Ichimoku 관련 제안 시 cloud 기반 조건 우선
+
+## AI Analysis (Gemini)
+- `src/analysis.py` — Gemini-powered per-ticker analysis, cached per-day per-ichimoku-mode in `data/analysis_cache.json`
+- Requires `GEMINI_API_KEY` in Streamlit secrets or env var. Free tier: ~1000 req/day
+- Session limit 30 requests to avoid abuse on shared URL
+- Uses `gemini-2.5-flash` with Korean system prompt + streaming response
