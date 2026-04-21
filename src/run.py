@@ -240,6 +240,22 @@ def run(tickers_df: pd.DataFrame | None = None, period: str = "2y") -> pd.DataFr
     # Drop helper columns not wanted in CSV
     result = result.drop(columns=[c for c in ("market_cap_krw", "shares_native") if c in result.columns])
 
+    # Preserve market_cap from previous results.csv for tickers without fresh shares.
+    # .info fetches are capped at 250/run, so most US tickers won't have shares on any
+    # given run; reusing last known market_cap avoids blank columns in the dashboard.
+    if RESULTS.exists():
+        try:
+            old = pd.read_csv(RESULTS, usecols=lambda c: c in ("ticker", "market_cap"))
+            if "market_cap" in old.columns:
+                old = old.rename(columns={"market_cap": "_mcap_prev"})
+                result = result.merge(old, on="ticker", how="left")
+                result["market_cap"] = result["market_cap"].fillna(result["_mcap_prev"])
+                result = result.drop(columns=["_mcap_prev"])
+                filled = int(result["market_cap"].notna().sum())
+                print(f"  market_cap: {filled}/{len(result)} populated (incl. preserved)")
+        except Exception as e:
+            print(f"  ! market_cap preservation skipped: {e}", file=sys.stderr)
+
     # Translate summaries and store in data/summaries_ko.json (not in CSV)
     print("  translating summaries...")
     translate_summaries(info_map)
