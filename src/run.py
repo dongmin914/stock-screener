@@ -19,6 +19,7 @@ from src.indicators import compute_features
 from src.tickers import get_ticker_frame
 from src.translate import translate_summaries
 from src.fx import fetch_usd_krw_batch
+from src.backtest import compute_win_rate
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 RESULTS = DATA_DIR / "results.csv"
@@ -41,14 +42,6 @@ def _flatten(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return df
 
 
-def analyze(ticker: str, raw: pd.DataFrame) -> dict | None:
-    df = _flatten(raw, ticker).dropna()
-    if len(df) < 220:
-        return None
-    feats = compute_features(df)
-    if not feats:
-        return None
-    return {"ticker": ticker, **{k: round(v, 3) if isinstance(v, float) else v for k, v in feats.items()}}
 
 
 INFO_FIELDS = ("shares", "sector", "industry", "summary", "website", "employees")
@@ -169,16 +162,23 @@ def run(tickers_df: pd.DataFrame | None = None, period: str = "2y") -> pd.DataFr
 
     rows: list[dict] = []
     failures: list[str] = []
+    ohlcv_cache: dict[str, pd.DataFrame] = {}
     for i in range(0, len(tickers), BATCH_SIZE):
         batch = tickers[i : i + BATCH_SIZE]
         data = yf.download(batch, period=period, progress=False, auto_adjust=True, group_by="ticker", threads=True)
         for t in batch:
             try:
-                row = analyze(t, data)
-                if row:
-                    rows.append(row)
-                else:
+                per_ticker_df = _flatten(data, t).dropna()
+                if len(per_ticker_df) < 220:
                     failures.append(t)
+                    continue
+                ohlcv_cache[t] = per_ticker_df  # keep for backtest
+                feats = compute_features(per_ticker_df)
+                if not feats:
+                    failures.append(t)
+                    continue
+                row = {"ticker": t, **{k: round(v, 3) if isinstance(v, float) else v for k, v in feats.items()}}
+                rows.append(row)
             except Exception as exc:
                 failures.append(t)
                 print(f"  ! {t}: {exc}", file=sys.stderr)
@@ -197,6 +197,29 @@ def run(tickers_df: pd.DataFrame | None = None, period: str = "2y") -> pd.DataFr
 
     result = pd.DataFrame(rows)
     result = result.merge(tickers_df, on="ticker", how="left")
+
+    # --- Win rate backtest ---
+    print(f"  computing win rates for {len(result)} tickers...")
+    t0 = time.time()
+    win_rates = []
+    win_events = []
+    for ticker in result["ticker"]:
+        df_bt = ohlcv_cache.get(ticker)
+        if df_bt is None or len(df_bt) < 400:
+            win_rates.append(None)
+            win_events.append(0)
+            continue
+        try:
+            wr, ev = compute_win_rate(df_bt)
+            win_rates.append(wr)
+            win_events.append(ev)
+        except Exception as exc:
+            print(f"  ! win_rate {ticker}: {exc}", file=sys.stderr)
+            win_rates.append(None)
+            win_events.append(0)
+    result["win_rate"] = win_rates
+    result["win_events"] = win_events
+    print(f"  win rates computed in {time.time() - t0:.1f}s")
 
     # Exchange rate for KR→USD conversion
     usd_krw = fetch_usd_krw_batch()
@@ -240,21 +263,27 @@ def run(tickers_df: pd.DataFrame | None = None, period: str = "2y") -> pd.DataFr
     # Drop helper columns not wanted in CSV
     result = result.drop(columns=[c for c in ("market_cap_krw", "shares_native") if c in result.columns])
 
-    # Preserve market_cap from previous results.csv for tickers without fresh shares.
-    # .info fetches are capped at 250/run, so most US tickers won't have shares on any
-    # given run; reusing last known market_cap avoids blank columns in the dashboard.
+    # Preserve market_cap, win_rate, win_events from previous results.csv.
+    # market_cap: .info fetches are capped at 250/run, so most US tickers won't have shares
+    # on any given run; reusing last known value avoids blank columns in the dashboard.
+    # win_rate/win_events: only recomputed when ohlcv_cache has ≥400 rows; preserve for tickers
+    # that fall below that threshold on a given run (e.g. new listings, data gaps).
     if RESULTS.exists():
         try:
-            old = pd.read_csv(RESULTS, usecols=lambda c: c in ("ticker", "market_cap"))
-            if "market_cap" in old.columns:
-                old = old.rename(columns={"market_cap": "_mcap_prev"})
-                result = result.merge(old, on="ticker", how="left")
-                result["market_cap"] = result["market_cap"].fillna(result["_mcap_prev"])
-                result = result.drop(columns=["_mcap_prev"])
-                filled = int(result["market_cap"].notna().sum())
-                print(f"  market_cap: {filled}/{len(result)} populated (incl. preserved)")
+            cols_to_preserve = ["market_cap", "win_rate", "win_events"]
+            old = pd.read_csv(RESULTS, usecols=lambda c: c in (["ticker"] + cols_to_preserve))
+            rename_map = {c: f"_prev_{c}" for c in cols_to_preserve if c in old.columns}
+            old = old.rename(columns=rename_map)
+            result = result.merge(old, on="ticker", how="left")
+            for c in cols_to_preserve:
+                prev_col = f"_prev_{c}"
+                if prev_col in result.columns:
+                    result[c] = result[c].fillna(result[prev_col])
+                    result = result.drop(columns=[prev_col])
+            filled = int(result["market_cap"].notna().sum())
+            print(f"  market_cap: {filled}/{len(result)} populated (incl. preserved)")
         except Exception as e:
-            print(f"  ! market_cap preservation skipped: {e}", file=sys.stderr)
+            print(f"  ! preservation step skipped: {e}", file=sys.stderr)
 
     # Translate summaries and store in data/summaries_ko.json (not in CSV)
     print("  translating summaries...")

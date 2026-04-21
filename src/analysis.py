@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
+
+import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CACHE_FILE = DATA_DIR / "analysis_cache.json"
@@ -102,8 +105,6 @@ def _build_user_prompt(row: dict, ichimoku_mode: str, summary_ko: str | None) ->
     met_str = ", ".join(met) if met else "없음"
 
     # Build prompt — skip lines where numeric values are None/NaN
-    import math
-
     def _is_valid(v) -> bool:
         if v is None:
             return False
@@ -141,6 +142,13 @@ def _build_user_prompt(row: dict, ichimoku_mode: str, summary_ko: str | None) ->
     if _is_valid(score):
         prompt += f"- 점수: {float(score):.1f}/10 (티어: {tier})\n"
     prompt += f"- 충족 조건: {met_str}\n"
+
+    # Add win rate to prompt if available
+    wr = row.get("win_rate")
+    we = row.get("win_events", 0)
+    if wr is not None and pd.notna(wr):
+        prompt += f"\n## 백테스트 (지난 1년)\n"
+        prompt += f"- 이 조건 충족 시 30일 내 5% 이상 상승 확률: {float(wr):.0f}% ({int(we)}회 중)\n"
 
     prompt += "\n위 데이터를 바탕으로 시스템 프롬프트의 4개 섹션 형식으로 분석해주세요.\n"
     return prompt

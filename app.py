@@ -219,8 +219,8 @@ view = view.sort_values(["score", "disparity_200"], ascending=[False, True]).res
 
 
 # --- Shared: chart + company info ---
-def _render_chart(selected_ticker: str, selected_name: str, tf: str):
-    st.markdown(f"### 📊 {selected_ticker} — {selected_name}")
+def _render_chart(selected_ticker: str, tf: str):
+    """Render TradingView widget. Title and signal card are rendered by the caller."""
     chart_h = 650
     widget_html = f"""
     <!DOCTYPE html>
@@ -361,6 +361,70 @@ def _render_ai_analysis(selected_ticker: str, selected_name: str, ichimoku_mode:
                         st.caption("아래 버튼을 누르면 Gemini가 이 종목을 분석합니다. (같은 날 같은 종목은 캐시 재사용)")
 
 
+def _trend(row) -> str:
+    price = row.get("price")
+    sma50 = row.get("sma50")
+    sma200 = row.get("sma200")
+    if any(pd.isna(v) for v in (price, sma50, sma200)):
+        return "횡보"
+    if price > sma200 and sma50 > sma200:
+        return "상승"
+    if price < sma200 and sma50 < sma200:
+        return "하락"
+    return "횡보"
+
+
+def _signal(tier: str) -> tuple[str, str]:
+    """Return (label, icon)."""
+    return {
+        "entry": ("매수", "🟢"),
+        "watch": ("분할 매수", "🟡"),
+        "pass": ("관망", "⚪"),
+    }.get(tier, ("관망", "⚪"))
+
+
+def _entry_target_stop(row) -> tuple[float | None, float | None, float | None]:
+    price = row.get("price")
+    bb_upper = row.get("bb_upper")
+    if pd.isna(price) if price is not None else True:
+        return None, None, None
+    entry = float(price)
+    target = max(float(bb_upper), entry * 1.10) if (bb_upper is not None and pd.notna(bb_upper)) else entry * 1.10
+    stop = entry * 0.92
+    return entry, target, stop
+
+
+def _render_signal_card(row):
+    """ChartPT-inspired signal summary card."""
+    trend = _trend(row)
+    signal_label, signal_icon = _signal(row.get("tier", "pass"))
+    score_val = row.get("score", 0)
+    win_rate = row.get("win_rate")
+    win_events = row.get("win_events", 0)
+
+    # Row 1: 추세 / 신호 / 점수 / 승률
+    c1, c2, c3, c4 = st.columns(4)
+
+    trend_icon = {"상승": "🟢", "하락": "🔴", "횡보": "⚪"}[trend]
+    c1.metric("📈 추세", f"{trend_icon} {trend}")
+    c2.metric("🎯 신호", f"{signal_icon} {signal_label}")
+    c3.metric("⭐ 점수", f"{float(score_val):.1f}/10" if pd.notna(score_val) else "-")
+    if pd.notna(win_rate) if win_rate is not None else False:
+        c4.metric("🏆 승률", f"{win_rate:.0f}%", help=f"지난 1년 · 진입 신호 {int(win_events)}회")
+    else:
+        c4.metric("🏆 승률", "-", help="데이터 부족 (신호 3회 미만)")
+
+    # Row 2: 진입가 / 목표가 / 손절가
+    entry, target, stop = _entry_target_stop(row)
+    e1, e2, e3 = st.columns(3)
+    if entry:
+        e1.metric("진입가", f"${entry:.2f}")
+        e2.metric("목표가", f"${target:.2f}", f"+{((target / entry - 1) * 100):.1f}%")
+        e3.metric("손절가", f"${stop:.2f}", f"-{((1 - stop / entry) * 100):.1f}%")
+
+    st.markdown("---")
+
+
 def _stars(score_val: float) -> str:
     if score_val >= 8.0:
         return "⭐⭐⭐⭐⭐"
@@ -441,8 +505,11 @@ def render_beginner(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: 
         key="beginner_chart_select",
     )
     selected_name = label_map[selected_ticker].split(" — ", 1)[1]
+    sel_row = view[view["ticker"] == selected_ticker].iloc[0].to_dict()
 
-    _render_chart(selected_ticker, selected_name, tf)
+    st.markdown(f"### 📊 {selected_ticker} — {selected_name}")
+    _render_signal_card(sel_row)
+    _render_chart(selected_ticker, tf)
     _render_company_info(selected_ticker, view, beginner=True)
     _render_ai_analysis(selected_ticker, selected_name, ichimoku_mode, view)
 
@@ -492,7 +559,10 @@ def render_advanced(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: 
         )
 
     if selected_ticker:
-        _render_chart(selected_ticker, selected_name, tf)
+        sel_row = view[view["ticker"] == selected_ticker].iloc[0].to_dict()
+        st.markdown(f"### 📊 {selected_ticker} — {selected_name}")
+        _render_signal_card(sel_row)
+        _render_chart(selected_ticker, tf)
         _render_company_info(selected_ticker, view, beginner=False)
         _render_ai_analysis(selected_ticker, selected_name, ichimoku_mode, view)
     else:
