@@ -219,9 +219,23 @@ view = view.sort_values(["score", "disparity_200"], ascending=[False, True]).res
 
 
 # --- Shared: chart + company info ---
+def _tv_symbol(ticker: str) -> str:
+    """Convert yfinance ticker format to TradingView symbol format.
+
+    yfinance uses `XXXXXX.KS` / `XXXXXX.KQ` but TradingView needs
+    `KRX:XXXXXX` / `KOSDAQ:XXXXXX` for Korean stocks.
+    """
+    if ticker.endswith(".KS"):
+        return f"KRX:{ticker[:-3]}"
+    if ticker.endswith(".KQ"):
+        return f"KOSDAQ:{ticker[:-3]}"
+    return ticker
+
+
 def _render_chart(selected_ticker: str, tf: str):
     """Render TradingView widget. Title and signal card are rendered by the caller."""
     chart_h = 650
+    tv_symbol = _tv_symbol(selected_ticker)
     widget_html = f"""
     <!DOCTYPE html>
     <html><head><style>
@@ -236,7 +250,7 @@ def _render_chart(selected_ticker: str, tf: str):
           new TradingView.widget({{
             "width": "100%",
             "height": {chart_h},
-            "symbol": "{selected_ticker}",
+            "symbol": "{tv_symbol}",
             "interval": "{tf}",
             "timezone": "Etc/UTC",
             "theme": "light",
@@ -395,34 +409,41 @@ def _entry_target_stop(row) -> tuple[float | None, float | None, float | None]:
 
 
 def _render_signal_card(row):
-    """ChartPT-inspired signal summary card."""
+    """ChartPT-inspired signal summary card — each metric in its own bordered container."""
     trend = _trend(row)
     signal_label, signal_icon = _signal(row.get("tier", "pass"))
     score_val = row.get("score", 0)
     win_rate = row.get("win_rate")
     win_events = row.get("win_events", 0)
-
-    # Row 1: 추세 / 신호 / 점수 / 승률
-    c1, c2, c3, c4 = st.columns(4)
-
     trend_icon = {"상승": "🟢", "하락": "🔴", "횡보": "⚪"}[trend]
-    c1.metric("📈 추세", f"{trend_icon} {trend}")
-    c2.metric("🎯 신호", f"{signal_icon} {signal_label}")
-    c3.metric("⭐ 점수", f"{float(score_val):.1f}/10" if pd.notna(score_val) else "-")
-    if pd.notna(win_rate) if win_rate is not None else False:
-        c4.metric("🏆 승률", f"{win_rate:.0f}%", help=f"지난 1년 · 진입 신호 {int(win_events)}회")
-    else:
-        c4.metric("🏆 승률", "-", help="데이터 부족 (신호 3회 미만)")
-
-    # Row 2: 진입가 / 목표가 / 손절가
     entry, target, stop = _entry_target_stop(row)
-    e1, e2, e3 = st.columns(3)
-    if entry:
-        e1.metric("진입가", f"${entry:.2f}")
-        e2.metric("목표가", f"${target:.2f}", f"+{((target / entry - 1) * 100):.1f}%")
-        e3.metric("손절가", f"${stop:.2f}", f"-{((1 - stop / entry) * 100):.1f}%")
 
-    st.markdown("---")
+    # Row 1: 추세 / 신호 / 점수 / 승률 — each in its own bordered card
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    with c1.container(border=True):
+        st.metric("📈 추세", f"{trend_icon} {trend}")
+    with c2.container(border=True):
+        st.metric("🎯 신호", f"{signal_icon} {signal_label}")
+    with c3.container(border=True):
+        st.metric("⭐ 점수", f"{float(score_val):.1f}/10" if pd.notna(score_val) else "-")
+    with c4.container(border=True):
+        if pd.notna(win_rate) if win_rate is not None else False:
+            st.metric("🏆 승률", f"{win_rate:.0f}%", help=f"지난 1년 · 진입 신호 {int(win_events)}회")
+        else:
+            st.metric("🏆 승률", "-", help="데이터 부족 (신호 3회 미만)")
+
+    # Row 2: 진입가 / 목표가 / 손절가 — each in its own bordered card
+    is_kr = str(row.get("ticker", "")).endswith((".KS", ".KQ"))
+    currency = "₩" if is_kr else "$"
+    fmt = ",.0f" if is_kr else ".2f"
+    e1, e2, e3 = st.columns(3, gap="small")
+    if entry:
+        with e1.container(border=True):
+            st.metric("진입가", f"{currency}{entry:{fmt}}")
+        with e2.container(border=True):
+            st.metric("목표가", f"{currency}{target:{fmt}}", f"+{((target / entry - 1) * 100):.1f}%")
+        with e3.container(border=True):
+            st.metric("손절가", f"{currency}{stop:{fmt}}", f"-{((1 - stop / entry) * 100):.1f}%")
 
 
 def _stars(score_val: float) -> str:
