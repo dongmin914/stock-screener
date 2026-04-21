@@ -251,9 +251,10 @@ def _render_chart(selected_ticker: str, selected_name: str, tf: str):
               "BB@tv-basicstudies",
               "IchimokuCloud@tv-basicstudies",
               "RSI@tv-basicstudies",
-              {{"id": "MASimple@tv-basicstudies", "inputs": {{"length": 200}}}}
+              "MASimple@tv-basicstudies"
             ],
             "studies_overrides": {{
+              "Moving Average.length": 200,
               "Moving Average.plot.color": "#e91e63",
               "Moving Average.plot.linewidth": 2
             }},
