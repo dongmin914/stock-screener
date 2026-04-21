@@ -62,6 +62,19 @@ def _persist(rate: float):
         pass
 
 
+def fetch_usd_krw_batch() -> float:
+    """Non-streamlit version for batch-time FX lookup. Returns DEFAULT_RATE on total failure."""
+    for fetch in (_fetch_via_download, _fetch_via_fast_info, _fetch_via_history):
+        try:
+            rate = fetch()
+            if rate and rate > 0:
+                _persist(rate)
+                return rate
+        except Exception:
+            continue
+    return _read_fallback()
+
+
 def _read_fallback() -> float:
     try:
         if META.exists():

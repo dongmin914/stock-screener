@@ -28,7 +28,13 @@ COND_SHORT = {
     "c6_ichimoku": "일목",
 }
 
-st.set_page_config(page_title="Stock Screener", layout="wide")
+BEGINNER_PRESETS = {
+    "안정형": {"min_score": 7.5, "rsi_th": 25, "disp_th": -15, "ichimoku_mode": "B"},
+    "균형형": {"min_score": 6.0, "rsi_th": 30, "disp_th": -10, "ichimoku_mode": "B"},
+    "공격형": {"min_score": 4.5, "rsi_th": 35, "disp_th": -5,  "ichimoku_mode": "C"},
+}
+
+st.set_page_config(page_title="Stock Recommender", layout="wide")
 
 # Tighten vertical spacing so chart + table fit without scroll on typical laptops.
 st.markdown(
@@ -46,7 +52,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("📈 나의 매수 타이밍 스크리너")
+st.title("📈 나의 매수 타이밍 추천")
 
 if not RESULTS.exists():
     st.warning("아직 데이터가 없어요. 터미널에서 `python -m src.run` 먼저 실행하세요.")
@@ -72,68 +78,108 @@ usd_krw, is_fresh = get_usd_krw()
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("🔍 필터")
+    # Mode toggle — first widget in sidebar
+    mode = st.radio(
+        "👤 모드",
+        ["쩨뿡이용", "기본"],
+        index=0,
+        horizontal=True,
+        help="쩨뿡이용: 단순화된 Top 10 카드 / 기본: 전체 필터 + 테이블",
+    )
+    st.divider()
 
     if not is_fresh:
         st.caption(f"⚠️ 환율 폴백: ₩{usd_krw:,.0f}")
     else:
         st.caption(f"환율: ₩{usd_krw:,.0f}")
 
-    tier_options = ["본진입 후보", "분할 매수 관심", "조건 미충족"]
-    tiers = st.multiselect("티어", tier_options, default=["본진입 후보", "분할 매수 관심"])
+    if mode == "쩨뿡이용":
+        # --- 쩨뿡이용 sidebar ---
+        investor_type = st.radio(
+            "🎯 투자 성향",
+            ["안정형", "균형형", "공격형"],
+            index=0,
+        )
+        preset = BEGINNER_PRESETS[investor_type]
+        min_score = preset["min_score"]
+        rsi_th = preset["rsi_th"]
+        disp_th = preset["disp_th"]
+        ichimoku_mode = preset["ichimoku_mode"]
+        tf = "W"  # 주봉 fixed for 쩨뿡이용
 
-    # 1조 = 1e12 KRW; boundaries stored in 조 units, compared against market_cap (USD)
-    mcap_preset = st.selectbox(
-        "시가총액",
-        ["전체", "대형주 (140조+)", "중대형주 (14조+)", "중형주 (2.8조+)", "소형주만 (2.8조 미만)", "직접 지정"],
-    )
-    if mcap_preset == "직접 지정":
-        mcap_min_jo = st.number_input("최소 시총 (조)", min_value=0.0, value=0.0, step=1.0)
-        mcap_max_jo = st.number_input("최대 시총 (조)", min_value=0.0, value=10000.0, step=1.0)
-        # Convert 조 → USD
-        mcap_min_usd = mcap_min_jo * 1e12 / usd_krw
-        mcap_max_usd = mcap_max_jo * 1e12 / usd_krw
+        mcap_choice = st.selectbox("💰 규모", ["대형주만", "전체"])
+        # 대형주만 → $10B equivalent (≈14조 KRW)
+        if mcap_choice == "대형주만":
+            mcap_min_usd = 14e12 / usd_krw
+        else:
+            mcap_min_usd = 0.0
+        mcap_max_usd = 1e18  # no upper bound
+
+        search = st.text_input("🔍 검색", placeholder="티커 / 회사명").strip()
+
+        # Tier includes all non-pass; filtered by min_score below
+        tiers = ["본진입 후보", "분할 매수 관심", "조건 미충족"]
+
+        st.divider()
+        st.link_button("🗺️ Finviz 섹터 히트맵", "https://finviz.com/map.ashx?t=sec", use_container_width=True)
+
     else:
-        # Preset KRW boundaries (조 units) → convert to USD live
-        _presets_jo = {
-            "전체": (0, 1e9),
-            "대형주 (140조+)": (140, 1e9),
-            "중대형주 (14조+)": (14, 1e9),
-            "중형주 (2.8조+)": (2.8, 1e9),
-            "소형주만 (2.8조 미만)": (0, 2.8),
+        # --- 기본 sidebar (unchanged) ---
+        st.header("🔍 필터")
+
+        tier_options = ["본진입 후보", "분할 매수 관심", "조건 미충족"]
+        tiers = st.multiselect("티어", tier_options, default=["본진입 후보", "분할 매수 관심"])
+
+        # 1조 = 1e12 KRW; boundaries stored in 조 units, compared against market_cap (USD)
+        mcap_preset = st.selectbox(
+            "시가총액",
+            ["전체", "대형주 (140조+)", "중대형주 (14조+)", "중형주 (2.8조+)", "소형주만 (2.8조 미만)", "직접 지정"],
+        )
+        if mcap_preset == "직접 지정":
+            mcap_min_jo = st.number_input("최소 시총 (조)", min_value=0.0, value=0.0, step=1.0)
+            mcap_max_jo = st.number_input("최대 시총 (조)", min_value=0.0, value=10000.0, step=1.0)
+            mcap_min_usd = mcap_min_jo * 1e12 / usd_krw
+            mcap_max_usd = mcap_max_jo * 1e12 / usd_krw
+        else:
+            _presets_jo = {
+                "전체": (0, 1e9),
+                "대형주 (140조+)": (140, 1e9),
+                "중대형주 (14조+)": (14, 1e9),
+                "중형주 (2.8조+)": (2.8, 1e9),
+                "소형주만 (2.8조 미만)": (0, 2.8),
+            }
+            min_jo, max_jo = _presets_jo[mcap_preset]
+            mcap_min_usd = min_jo * 1e12 / usd_krw
+            mcap_max_usd = max_jo * 1e12 / usd_krw
+
+        search = st.text_input("티커 / 회사명 검색").strip()
+
+        st.divider()
+        st.header("⚙️ 기준값 조정")
+        min_score = st.slider("최소 점수", 0.0, 10.0, 5.0, 0.5, help="10점 만점 · 본진입 ≥7.5, 분할 매수 ≥5.0")
+        rsi_th = st.slider("RSI 과매도 기준", 10, 50, 30, help="이 값 이하에 도달 후 반등하면 조건 충족")
+        disp_th = st.slider("이격도 기준 (%)", -40, 0, -10, help="200일선 대비 이 % 이하면 조건 충족")
+
+        ichimoku_labels = {
+            "A": "A · 전환>기준 돌파 (단기 골든크로스)",
+            "B": "B · 가격 구름대 아래 (저점 매수존)",
+            "C": "C · 구름대 상향 돌파 (추세 전환 초기)",
+            "D": "D · 가격 구름대 내부 (추세 전환 진행)",
         }
-        min_jo, max_jo = _presets_jo[mcap_preset]
-        mcap_min_usd = min_jo * 1e12 / usd_krw
-        mcap_max_usd = max_jo * 1e12 / usd_krw
+        ichimoku_mode = st.radio(
+            "일목 조건",
+            list(ichimoku_labels.keys()),
+            index=1,
+            format_func=lambda k: ichimoku_labels[k],
+        )
 
-    search = st.text_input("티커 / 회사명 검색").strip()
+        st.divider()
+        st.header("📐 차트 설정")
+        tf_label = st.radio("시간프레임", ["주봉", "일봉", "월봉"], horizontal=True)
+        interval_map = {"주봉": "W", "일봉": "D", "월봉": "M"}
+        tf = interval_map[tf_label]
 
-    st.divider()
-    st.header("⚙️ 기준값 조정")
-    min_score = st.slider("최소 점수", 0.0, 10.0, 5.0, 0.5, help="10점 만점 · 본진입 ≥7.5, 분할 매수 ≥5.0")
-    rsi_th = st.slider("RSI 과매도 기준", 10, 50, 30, help="이 값 이하에 도달 후 반등하면 조건 충족")
-    disp_th = st.slider("이격도 기준 (%)", -40, 0, -10, help="200일선 대비 이 % 이하면 조건 충족")
-
-    ichimoku_labels = {
-        "A": "A · 전환>기준 돌파 (단기 골든크로스)",
-        "B": "B · 가격 구름대 아래 (저점 매수존)",
-        "C": "C · 구름대 상향 돌파 (추세 전환 초기)",
-        "D": "D · 가격 구름대 내부 (추세 전환 진행)",
-    }
-    ichimoku_mode = st.radio(
-        "일목 조건",
-        list(ichimoku_labels.keys()),
-        index=1,  # default to B (cloud-only style)
-        format_func=lambda k: ichimoku_labels[k],
-    )
-
-    st.divider()
-    st.header("📐 차트 설정")
-    tf_label = st.radio("시간프레임", ["주봉", "일봉", "월봉"], horizontal=True)
-    interval_map = {"주봉": "W", "일봉": "D", "월봉": "M"}
-    tf = interval_map[tf_label]
-
-    st.link_button("🗺️ Finviz 섹터 히트맵", "https://finviz.com/map.ashx?t=sec", use_container_width=True)
+        st.link_button("🗺️ Finviz 섹터 히트맵", "https://finviz.com/map.ashx?t=sec", use_container_width=True)
 
 # --- Live re-score ---
 def _compute(row):
@@ -170,52 +216,9 @@ if search:
     view = view[view["ticker"].str.upper().str.contains(q) | view["name"].str.upper().str.contains(q)]
 view = view.sort_values(["score", "disparity_200"], ascending=[False, True]).reset_index(drop=True)
 
-if "market_cap" in view.columns:
-    view["시총"] = view["market_cap"].apply(lambda v: format_market_cap(v, usd_krw))
-for key, short in COND_SHORT.items():
-    view[short] = view[key].map({True: "✅", False: "·"})
-view["티어"] = view["tier"].map(lambda t: f"{TIER_ICON.get(t, '·')}")
 
-# Determine selected ticker from previous-run session state (table renders first now,
-# but its selection from the prior rerun still drives chart below).
-if len(view) == 0:
-    selected_ticker = None
-    selected_name = None
-else:
-    sel_state = st.session_state.get("result_table")
-    sel_rows = sel_state.selection.rows if sel_state and getattr(sel_state, "selection", None) else []
-    idx = sel_rows[0] if sel_rows else 0
-    idx = min(idx, len(view) - 1)
-    selected_ticker = view.iloc[idx]["ticker"]
-    selected_name = view.iloc[idx]["name"]
-
-# --- Table on top (full width) ---
-st.markdown("### 📋 스크리닝 결과 (행 클릭 → 아래 차트 갱신)")
-
-if len(view) > 0:
-    compact_cols = ["ticker", "name"]
-    if "시총" in view.columns:
-        compact_cols.append("시총")
-    compact_cols += ["티어", "score"] + list(COND_SHORT.values()) + ["disparity_200", "rsi14"]
-
-    st.dataframe(
-        view[compact_cols].rename(columns={
-            "ticker": "티커",
-            "name": "회사명",
-            "score": "점수",
-            "disparity_200": "이격%",
-            "rsi14": "RSI",
-        }),
-        use_container_width=True,
-        height=400,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="result_table",
-    )
-
-# --- Chart below table (full width) ---
-if selected_ticker:
+# --- Shared: chart + company info ---
+def _render_chart(selected_ticker: str, selected_name: str, tf: str):
     st.markdown(f"### 📊 {selected_ticker} — {selected_name}")
     chart_h = 650
     widget_html = f"""
@@ -256,11 +259,14 @@ if selected_ticker:
     """
     components.html(widget_html, height=chart_h + 5, scrolling=False)
 
-    # --- Company info expander (below chart) ---
+
+def _render_company_info(selected_ticker: str, view: pd.DataFrame, beginner: bool = False):
+    """Render company info expander. beginner=True renames expander + external link buttons."""
     summary_cache = load_summary_cache()
     sel_row = view[view["ticker"] == selected_ticker].iloc[0]
 
-    with st.expander("🏢 회사 정보", expanded=True):
+    expander_label = "📖 이 회사는 뭘 하나요?" if beginner else "🏢 회사 정보"
+    with st.expander(expander_label, expanded=True):
         col1, col2 = st.columns([1, 1])
         col1.markdown(f"**섹터:** {translate_sector(sel_row.get('sector'))}")
         col1.markdown(f"**업종:** {translate_industry(sel_row.get('industry'))}")
@@ -283,35 +289,180 @@ if selected_ticker:
 
         st.markdown("**🔗 외부 링크**")
         lcol1, lcol2, lcol3 = st.columns(3)
-        lcol1.link_button("Finviz", f"https://finviz.com/quote.ashx?t={selected_ticker}", use_container_width=True)
-        lcol2.link_button("Stock Analysis", f"https://stockanalysis.com/stocks/{selected_ticker.lower()}/", use_container_width=True)
-        lcol3.link_button("Yahoo Finance", f"https://finance.yahoo.com/quote/{selected_ticker}", use_container_width=True)
+        if beginner:
+            lcol1.link_button("실시간 정보", f"https://finviz.com/quote.ashx?t={selected_ticker}", use_container_width=True)
+            lcol2.link_button("매출/재무 구조", f"https://stockanalysis.com/stocks/{selected_ticker.lower()}/", use_container_width=True)
+            lcol3.link_button("종합 정보", f"https://finance.yahoo.com/quote/{selected_ticker}", use_container_width=True)
+        else:
+            lcol1.link_button("Finviz", f"https://finviz.com/quote.ashx?t={selected_ticker}", use_container_width=True)
+            lcol2.link_button("Stock Analysis", f"https://stockanalysis.com/stocks/{selected_ticker.lower()}/", use_container_width=True)
+            lcol3.link_button("Yahoo Finance", f"https://finance.yahoo.com/quote/{selected_ticker}", use_container_width=True)
 
-else:
-    st.info("필터 조건에 맞는 종목이 없어요. 사이드바에서 기준을 완화하세요.")
 
-with st.expander("체크리스트 설명 / 점수 기준 (10점 만점)"):
-    st.markdown(
-        f"""
-        현재 기준: **RSI ≤ {rsi_th}**, **이격도 ≤ {disp_th}%**, **일목 {ichimoku_mode}**
+def _stars(score_val: float) -> str:
+    if score_val >= 8.0:
+        return "⭐⭐⭐⭐⭐"
+    if score_val >= 6.5:
+        return "⭐⭐⭐⭐"
+    if score_val >= 5.0:
+        return "⭐⭐⭐"
+    return ""
 
-        | 조건 | 배점 | 채점 |
-        |------|------|------|
-        | 200MA↓ | 1.0 | 200일선 아래면 1.0 |
-        | 이격 | 2.5 | `min(\|이격\|/\|기준\|, 1.0) × 2.5` — 기준 도달 시 만점 |
-        | RSI반등 | 1.5 | 최근 10봉 내 RSI≤기준 경험 후 현재 반등 중 |
-        | 볼밴 | 1.5 | 최근 5봉 내 하단 이탈, 현재 복귀 |
-        | 거래량 | 1.5 | ≥1.5배 + 양봉 = 만점 / ≥1.0배 = 절반 |
-        | 일목 ({ichimoku_mode}) | 2.0 | {ICHIMOKU_MODES[ichimoku_mode][0]} |
 
-        - 🟢 **본진입 후보**: **7.5점 이상**
-        - 🟡 **분할 매수 관심**: **5.0 이상 7.5 미만**
-        - ⚪ **조건 미충족**: 5.0 미만
+def _build_reasons(row, ichimoku_mode: str) -> list[str]:
+    reasons = []
+    if row.get("c1_below_sma200"):
+        reasons.append("장기 추세선 아래 저평가 구간")
+    if row.get("c2_disparity", 0) > 0:
+        disp = abs(row.get("disparity_200", 0))
+        reasons.append(f"200일선 대비 {disp:.1f}% 할인된 가격")
+    if row.get("c3_rsi_bounce"):
+        reasons.append("과매도 이후 반등 초기 신호")
+    if row.get("c4_bb_signal"):
+        reasons.append("변동성 밴드 하단 터치 후 회복")
+    if row.get("c5_volume"):
+        reasons.append("거래량 급증 + 양봉 (매수세 확인)")
+    if row.get("c6_ichimoku"):
+        ichimoku_text = {
+            "A": "단기 골든크로스 신호",
+            "B": "추세 전환 대기 구간 (저점 매수존)",
+            "C": "하락 추세 종료 + 상승 전환 신호",
+            "D": "추세 전환 진행 중",
+        }
+        reasons.append(ichimoku_text.get(ichimoku_mode, ""))
+    return [r for r in reasons if r]
 
-        **일목 옵션**:
-        - A · 전환>기준 돌파 (최근 3봉 내 단기 골든크로스)
-        - B · 가격 < min(스팬1, 스팬2) — 구름대 아래 약세 구간
-        - C · 최근 5봉 내 구름대 아래였다가 현재 상단 돌파
-        - D · min(스팬) ≤ 가격 ≤ max(스팬) — 구름대 내부 (추세전환 진행)
-        """
+
+def render_beginner(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: str):
+    """쩨뿡이용 mode: cards + dropdown + chart + company info."""
+    st.markdown("## 🎯 오늘의 추천 종목 TOP 10")
+
+    if len(view) == 0:
+        st.info("필터 조건에 맞는 종목이 없어요. 사이드바에서 투자 성향을 변경하거나 규모 필터를 완화하세요.")
+        return
+
+    top10 = view.head(10)
+
+    for i, (_, row) in enumerate(top10.iterrows(), start=1):
+        with st.container(border=True):
+            top_l, top_r = st.columns([4, 1])
+            top_l.markdown(f"### {TIER_ICON[row['tier']]} [{i}] {row['name']} ({row['ticker']})")
+            top_r.markdown(
+                f"<div style='text-align:right;font-size:1.1rem'>{_stars(row['score'])}</div>",
+                unsafe_allow_html=True,
+            )
+
+            meta_parts = []
+            if pd.notna(row.get("sector")):
+                meta_parts.append(translate_sector(row["sector"]))
+            if pd.notna(row.get("industry")):
+                meta_parts.append(translate_industry(row["industry"]))
+            if pd.notna(row.get("market_cap")):
+                meta_parts.append(format_market_cap(row["market_cap"], usd_krw))
+            if meta_parts:
+                st.caption(" · ".join(meta_parts))
+
+            reasons = _build_reasons(row, ichimoku_mode)
+            if reasons:
+                st.markdown("**💡 이 종목이 추천된 이유:**")
+                for r in reasons:
+                    st.markdown(f"- ✓ {r}")
+
+    st.markdown("---")
+
+    options = top10["ticker"].tolist()
+    label_map = {t: f"{t} — {n}" for t, n in zip(top10["ticker"], top10["name"])}
+    selected_ticker = st.selectbox(
+        "📊 차트로 볼 종목",
+        options,
+        format_func=lambda t: label_map[t],
+        key="beginner_chart_select",
     )
+    selected_name = label_map[selected_ticker].split(" — ", 1)[1]
+
+    _render_chart(selected_ticker, selected_name, tf)
+    _render_company_info(selected_ticker, view, beginner=True)
+
+
+def render_advanced(view: pd.DataFrame, usd_krw: float, ichimoku_mode: str, tf: str, rsi_th: int, disp_th: int):
+    """기본 mode: table + chart + company info + checklist expander."""
+    if "market_cap" in view.columns:
+        view["시총"] = view["market_cap"].apply(lambda v: format_market_cap(v, usd_krw))
+    for key, short in COND_SHORT.items():
+        view[short] = view[key].map({True: "✅", False: "·"})
+    view["티어"] = view["tier"].map(lambda t: f"{TIER_ICON.get(t, '·')}")
+
+    # Determine selected ticker
+    if len(view) == 0:
+        selected_ticker = None
+        selected_name = None
+    else:
+        sel_state = st.session_state.get("result_table")
+        sel_rows = sel_state.selection.rows if sel_state and getattr(sel_state, "selection", None) else []
+        idx = sel_rows[0] if sel_rows else 0
+        idx = min(idx, len(view) - 1)
+        selected_ticker = view.iloc[idx]["ticker"]
+        selected_name = view.iloc[idx]["name"]
+
+    st.markdown("### 🎯 추천 종목 리스트 (행 클릭 → 아래 차트 갱신)")
+
+    if len(view) > 0:
+        compact_cols = ["ticker", "name"]
+        if "시총" in view.columns:
+            compact_cols.append("시총")
+        compact_cols += ["티어", "score"] + list(COND_SHORT.values()) + ["disparity_200", "rsi14"]
+
+        st.dataframe(
+            view[compact_cols].rename(columns={
+                "ticker": "티커",
+                "name": "회사명",
+                "score": "점수",
+                "disparity_200": "이격%",
+                "rsi14": "RSI",
+            }),
+            use_container_width=True,
+            height=400,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="result_table",
+        )
+
+    if selected_ticker:
+        _render_chart(selected_ticker, selected_name, tf)
+        _render_company_info(selected_ticker, view, beginner=False)
+    else:
+        st.info("필터 조건에 맞는 종목이 없어요. 사이드바에서 기준을 완화하세요.")
+
+    with st.expander("체크리스트 설명 / 점수 기준 (10점 만점)"):
+        st.markdown(
+            f"""
+            현재 기준: **RSI ≤ {rsi_th}**, **이격도 ≤ {disp_th}%**, **일목 {ichimoku_mode}**
+
+            | 조건 | 배점 | 채점 |
+            |------|------|------|
+            | 200MA↓ | 1.0 | 200일선 아래면 1.0 |
+            | 이격 | 2.5 | `min(\|이격\|/\|기준\|, 1.0) × 2.5` — 기준 도달 시 만점 |
+            | RSI반등 | 1.5 | 최근 10봉 내 RSI≤기준 경험 후 현재 반등 중 |
+            | 볼밴 | 1.5 | 최근 5봉 내 하단 이탈, 현재 복귀 |
+            | 거래량 | 1.5 | ≥1.5배 + 양봉 = 만점 / ≥1.0배 = 절반 |
+            | 일목 ({ichimoku_mode}) | 2.0 | {ICHIMOKU_MODES[ichimoku_mode][0]} |
+
+            - 🟢 **본진입 후보**: **7.5점 이상**
+            - 🟡 **분할 매수 관심**: **5.0 이상 7.5 미만**
+            - ⚪ **조건 미충족**: 5.0 미만
+
+            **일목 옵션**:
+            - A · 전환>기준 돌파 (최근 3봉 내 단기 골든크로스)
+            - B · 가격 < min(스팬1, 스팬2) — 구름대 아래 약세 구간
+            - C · 최근 5봉 내 구름대 아래였다가 현재 상단 돌파
+            - D · min(스팬) ≤ 가격 ≤ max(스팬) — 구름대 내부 (추세전환 진행)
+            """
+        )
+
+
+# --- Main content dispatch ---
+if mode == "쩨뿡이용":
+    render_beginner(view, usd_krw, ichimoku_mode, tf)
+else:
+    render_advanced(view, usd_krw, ichimoku_mode, tf, rsi_th, disp_th)

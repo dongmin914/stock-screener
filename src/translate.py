@@ -14,6 +14,14 @@ CACHE_FILE = DATA_DIR / "summaries_ko.json"
 logger = logging.getLogger(__name__)
 
 
+def _is_korean(text: str) -> bool:
+    """Return True if text has >10% Hangul syllables."""
+    if not text:
+        return False
+    hangul = sum(1 for c in text if '\uAC00' <= c <= '\uD7A3')
+    return hangul / len(text) > 0.1
+
+
 def load_cache() -> dict:
     """Read data/summaries_ko.json → {ticker: {"hash": ..., "ko": ..., "translated_at": ...}}."""
     try:
@@ -66,6 +74,16 @@ def translate_summaries(info_dict: dict[str, dict]) -> dict[str, str]:
             # Cache hit — no API call needed
             results[ticker] = cached["ko"]
             hit_count += 1
+        elif _is_korean(summary):
+            # Already Korean — store as-is, skip API call
+            cache[ticker] = {
+                "hash": text_hash,
+                "ko": summary,
+                "en": None,
+                "translated_at": datetime.now(timezone.utc).date().isoformat(),
+            }
+            results[ticker] = summary
+            hit_count += 1  # no API call consumed
         elif use_english_fallback:
             # Store English in cache so dashboard shows *something* and next run can retry Korean
             cache[ticker] = {"hash": text_hash, "ko": None, "en": summary, "translated_at": None}

@@ -5,3 +5,4 @@ streamlit>=1.30
 lxml>=5.0
 requests>=2.31
 deep-translator>=1.11
+finance-datareader>=0.9.96
