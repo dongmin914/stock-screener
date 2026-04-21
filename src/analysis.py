@@ -160,20 +160,26 @@ def analyze_stream(row: dict, ichimoku_mode: str, summary_ko: str | None) -> Ite
     """Stream Gemini analysis tokens. Saves to cache on completion.
 
     Raises RuntimeError if API key missing.
+    Uses the new `google-genai` unified SDK (legacy `google-generativeai` is deprecated).
     """
     api_key = get_api_key()
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다.")
 
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
+    from google import genai
+    from google.genai import types
 
+    client = genai.Client(api_key=api_key)
     prompt = _build_user_prompt(row, ichimoku_mode, summary_ko)
-    response = model.generate_content(prompt, stream=True)
+
+    stream = client.models.generate_content_stream(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+    )
 
     collected = []
-    for chunk in response:
+    for chunk in stream:
         text = chunk.text or ""
         collected.append(text)
         yield text
